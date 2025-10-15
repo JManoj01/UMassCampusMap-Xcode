@@ -1,17 +1,27 @@
 import Foundation
 import MapKit
 import Combine
+import CoreLocation
 
 class MapViewModel: ObservableObject {
     @Published var locations: [CampusLocation] = []
     @Published var selectedLocation: CampusLocation?
+    @Published var route: MKRoute?
+    @Published var isCalculatingRoute = false
+    @Published var userLocation: CLLocation?
+    @Published var routeError: String?
+    
+    private let favoritesKey = "savedFavorites"
+    private var cancellables = Set<AnyCancellable>()
     
     init() {
         loadLocations()
+        loadFavorites()
     }
     
     func loadLocations() {
         locations = [
+            // Study Spots
             CampusLocation(
                 name: "W.E.B. Du Bois Library",
                 category: .studySpot,
@@ -141,16 +151,131 @@ class MapViewModel: ObservableObject {
     func toggleFavorite(location: CampusLocation) {
         if let index = locations.firstIndex(where: { $0.id == location.id }) {
             locations[index].isFavorite.toggle()
+            saveFavorites()
+            
             if let selectedIndex = selectedLocation?.id, selectedIndex == location.id {
                 selectedLocation = locations[index]
             }
         }
     }
     
+    func locationsSortedByDistance() -> [CampusLocation] {
+        guard let userLocation = userLocation else { 
+            return locations.sorted { $0.name < $1.name }
+        }
+        
+        return locations.sorted { location1, location2 in
+            let distance1 = userLocation.distance(from: CLLocation(
+                latitude: location1.coordinate.latitude,
+                longitude: location1.coordinate.longitude
+            ))
+            let distance2 = userLocation.distance(from: CLLocation(
+                latitude: location2.coordinate.latitude,
+                longitude: location2.coordinate.longitude
+            ))
+            return distance1 < distance2
+        }
+    }
+    
     func centerOnCampus() {
+        selectedLocation = nil
+        route = nil
+    }
+    
+    func getWalkingDirections(from source: CampusLocation, to destination: CampusLocation) {
+        isCalculatingRoute = true
+        routeError = nil
+        
+        let request = MKDirections.Request()
+        request.source = MKMapItem(placemark: MKPlacemark(coordinate: source.coordinate))
+        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: destination.coordinate))
+        request.transportType = .walking
+        request.requestsAlternateRoutes = false
+        
+        let directions = MKDirections(request: request)
+        directions.calculate { [weak self] response, error in
+            DispatchQueue.main.async {
+                self?.isCalculatingRoute = false
+                
+                if let error = error {
+                    self?.routeError = "Could not calculate route: \(error.localizedDescription)"
+                    self?.route = nil
+                    return
+                }
+                
+                guard let route = response?.routes.first else {
+                    self?.routeError = "No route found"
+                    self?.route = nil
+                    return
+                }
+                
+                self?.route = route
+                self?.routeError = nil
+            }
+        }
+    }
+    
+    func clearRoute() {
+        route = nil
+        routeError = nil
+        isCalculatingRoute = false
+    }
+    
+    func distanceToLocation(_ location: CampusLocation) -> String? {
+        guard let userLocation = userLocation else { return nil }
+        
+        let distance = userLocation.distance(from: CLLocation(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude
+        ))
+        
+        if distance < 1000 {
+            return String(format: "%.0f m away", distance)
+        } else {
+            return String(format: "%.1f km away", distance / 1000)
+        }
+    }
+    
+    func walkingTimeToLocation(_ location: CampusLocation) -> String? {
+        guard let userLocation = userLocation else { return nil }
+        
+        let distance = userLocation.distance(from: CLLocation(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude
+        ))
+        
+        let timeInSeconds = distance / 1.4
+        let minutes = Int(ceil(timeInSeconds / 60))
+        
+        if minutes < 1 {
+            return "< 1 min walk"
+        } else if minutes == 1 {
+            return "1 min walk"
+        } else {
+            return "\(minutes) min walk"
+        }
     }
     
     var favoriteLocations: [CampusLocation] {
         locations.filter { $0.isFavorite }
+    }
+    
+    
+    private func saveFavorites() {
+        let favoriteIDs = locations.filter { $0.isFavorite }.map { $0.id.uuidString }
+        UserDefaults.standard.set(favoriteIDs, forKey: favoritesKey)
+    }
+    
+    private func loadFavorites() {
+        guard let savedIDs = UserDefaults.standard.array(forKey: favoritesKey) as? [String] else { 
+            return 
+        }
+        let savedUUIDs = savedIDs.compactMap { UUID(uuidString: $0) }
+        
+        for index in locations.indices {
+            if savedUUIDs.contains(locations[index].id) {
+                locations[index].isFavorite = true
+            }
+        }
     }
 }

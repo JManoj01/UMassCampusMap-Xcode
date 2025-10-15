@@ -30,7 +30,6 @@ enum LocationCategory: String, CaseIterable {
     }
 }
 
-// MARK: - Campus Location
 struct CampusLocation: Identifiable, Equatable {
     let id = UUID()
     let name: String
@@ -45,7 +44,6 @@ struct CampusLocation: Identifiable, Equatable {
     }
 }
 
-// MARK: - Location Annotation
 class LocationAnnotation: NSObject, MKAnnotation {
     let location: CampusLocation
     var coordinate: CLLocationCoordinate2D
